@@ -19,6 +19,8 @@ A [Datadog](https://datadoghq.com) Handler for [slog](https://pkg.go.dev/golang.
 - [slog-slack](https://github.com/samber/slog-slack): A `slog` handler for `Slack`
 - [slog-loki](https://github.com/samber/slog-loki): A `slog` handler for `Loki`
 - [slog-sentry](https://github.com/samber/slog-sentry): A `slog` handler for `Sentry`
+- [slog-fluentd](https://github.com/samber/slog-fluentd): A `slog` handler for `Fluentd`
+- [slog-syslog](https://github.com/samber/slog-syslog): A `slog` handler for `Syslog`
 
 ## 🚀 Install
 

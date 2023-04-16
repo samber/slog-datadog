@@ -14,7 +14,8 @@ A [Datadog](https://datadoghq.com) Handler for [slog](https://pkg.go.dev/golang.
 
 **See also:**
 
-- [slog-multi](https://github.com/samber/slog-multi): workflows of `slog` handlers (pipeline, fanout)
+- [slog-multi](https://github.com/samber/slog-multi): workflows of `slog` handlers (pipeline, fanout, ...)
+- [slog-formatter](https://github.com/samber/slog-formatter): `slog` attribute formatting
 - [slog-logstash](https://github.com/samber/slog-logstash): A `slog` handler for `Logstash`
 - [slog-slack](https://github.com/samber/slog-slack): A `slog` handler for `Slack`
 - [slog-loki](https://github.com/samber/slog-loki): A `slog` handler for `Loki`
@@ -147,7 +148,7 @@ make watch-test
 
 Give a ⭐️ if this project helped you!
 
-![GitHub Sponsors](https://img.shields.io/github/sponsors/samber?style=for-the-badge)
+[![GitHub Sponsors](https://img.shields.io/github/sponsors/samber?style=for-the-badge)](https://github.com/sponsors/samber)
 
 ## 📝 License
 

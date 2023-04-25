@@ -18,8 +18,9 @@ func DefaultConverter(loggerAttr []slog.Attr, record *slog.Record) map[string]an
 	log["logger.version"] = version
 
 	attrToDatadogLog("", loggerAttr, &log)
-	record.Attrs(func(attr slog.Attr) {
+	record.Attrs(func(attr slog.Attr) bool {
 		attrToDatadogLog("", []slog.Attr{attr}, &log)
+		return true
 	})
 
 	return log

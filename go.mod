@@ -4,6 +4,7 @@ go 1.20
 
 require (
 	github.com/DataDog/datadog-api-client-go/v2 v2.11.0
+	go.uber.org/goleak v1.2.1
 	golang.org/x/exp v0.0.0-20230425010034-47ecfdc1ba53
 )
 

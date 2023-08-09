@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"strconv"
 
-	"golang.org/x/exp/slog"
+	"log/slog"
 )
 
 type Converter func(loggerAttr []slog.Attr, record *slog.Record) map[string]any

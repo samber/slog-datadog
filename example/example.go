@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"time"
 
+	"log/slog"
+
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadog"
 	slogdatadog "github.com/samber/slog-datadog"
-	"golang.org/x/exp/slog"
 )
 
 func newDatadogClient(endpoint string, apiKey string) (*datadog.APIClient, context.Context) {

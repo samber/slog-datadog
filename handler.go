@@ -51,6 +51,8 @@ func (o Option) NewDatadogHandler() slog.Handler {
 	}
 }
 
+var _ slog.Handler = (*DatadogHandler)(nil)
+
 type DatadogHandler struct {
 	option Option
 	attrs  []slog.Attr

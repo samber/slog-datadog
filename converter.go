@@ -33,7 +33,7 @@ func attrToDatadogLog(base string, attrs []slog.Attr, log *map[string]any) {
 		v := attr.Value
 		kind := attr.Value.Kind()
 
-		if attr.Key == "error" && kind == slog.KindAny {
+		if (attr.Key == "error" || attr.Key == "err") && kind == slog.KindAny {
 			if err, ok := attr.Value.Any().(error); ok {
 				kind, message, stack := buildExceptions(err)
 				(*log)[base+k+".kind"] = kind

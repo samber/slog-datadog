@@ -116,34 +116,34 @@ func newDatadogClient(endpoint string, apiKey string) (*datadog.APIClient, conte
 }
 
 func main() {
-    host := "1.2.3.4"
+	host := "1.2.3.4"
 	service := "api"
 	endpoint := slogdatadog.DatadogHostEU
 	apiKey := "xxx"
 	apiClient, ctx := newDatadogClient(endpoint, apiKey)
 
 	logger := slog.New(slogdatadog.Option{Level: slog.LevelDebug, Client: apiClient, Context: ctx, Hostname: host, Service: service}.NewDatadogHandler())
-    logger = logger.
-        With("environment", "dev").
-        With("release", "v1.0.0")
+	logger = logger.
+		With("environment", "dev").
+		With("release", "v1.0.0")
 
-    // log error
-    logger.
-        With("category", "sql").
-        With("query.statement", "SELECT COUNT(*) FROM users;").
-        With("query.duration", 1*time.Second).
-        With("error", fmt.Errorf("could not count users")).
-        Error("caramba!")
+	// log error
+	logger.
+		With("category", "sql").
+		With("query.statement", "SELECT COUNT(*) FROM users;").
+		With("query.duration", 1*time.Second).
+		With("error", fmt.Errorf("could not count users")).
+		Error("caramba!")
 
-    // log user signup
-    logger.
-        With(
-            slog.Group("user",
-                slog.String("id", "user-123"),
-                slog.Time("created_at", time.Now()),
-            ),
-        ).
-        Info("user registration")
+	// log user signup
+	logger.
+		With(
+			slog.Group("user",
+				slog.String("id", "user-123"),
+				slog.Time("created_at", time.Now()),
+			),
+		).
+		Info("user registration")
 }
 ```
 

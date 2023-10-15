@@ -72,10 +72,21 @@ type Option struct {
 
 	// optional: customize Datadog message builder
 	Converter Converter
+
+	// optional: see slog.HandlerOptions
+	AddSource   bool
+	ReplaceAttr func(groups []string, a slog.Attr) slog.Attr
 }
 ```
 
 Attributes will be injected in log payload.
+
+Other global parameters:
+
+```go
+slogdatadog.SourceKey = "source"
+slogdatadog.ErrorKeys = []string{"error", "err"}
+```
 
 ### Example
 

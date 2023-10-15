@@ -8,6 +8,8 @@ import (
 
 	"log/slog"
 
+	slogcommon "github.com/samber/slog-common"
+
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadog"
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadogV2"
 )
@@ -29,6 +31,10 @@ type Option struct {
 
 	// optional: customize Datadog message builder
 	Converter Converter
+
+	// optional: see slog.HandlerOptions
+	AddSource   bool
+	ReplaceAttr func(groups []string, a slog.Attr) slog.Attr
 }
 
 func (o Option) NewDatadogHandler() slog.Handler {
@@ -69,7 +75,7 @@ func (h *DatadogHandler) Handle(ctx context.Context, record slog.Record) error {
 		converter = h.option.Converter
 	}
 
-	log := converter(h.attrs, &record)
+	log := converter(h.option.AddSource, h.option.ReplaceAttr, h.attrs, h.groups, &record)
 	bytes, err := json.Marshal(log)
 	if err != nil {
 		return err
@@ -82,7 +88,7 @@ func (h *DatadogHandler) Handle(ctx context.Context, record slog.Record) error {
 func (h *DatadogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return &DatadogHandler{
 		option: h.option,
-		attrs:  appendAttrsToGroup(h.groups, h.attrs, attrs),
+		attrs:  slogcommon.AppendAttrsToGroup(h.groups, h.attrs, attrs...),
 		groups: h.groups,
 	}
 }
@@ -105,7 +111,7 @@ func (h *DatadogHandler) send(message string) error {
 
 	body := []datadogV2.HTTPLogItem{
 		{
-			Ddsource: datadog.PtrString("samber/slog-datadog"),
+			Ddsource: datadog.PtrString(name),
 			Hostname: datadog.PtrString(h.option.Hostname),
 			Service:  datadog.PtrString(h.option.Service),
 			Ddtags:   datadog.PtrString(strings.Join(tags, ",")),

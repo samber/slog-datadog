@@ -1,28 +1,35 @@
 package slogdatadog
 
 import (
-	"encoding"
-	"fmt"
 	"reflect"
-	"strconv"
 
 	"log/slog"
+
+	slogcommon "github.com/samber/slog-common"
 )
 
-type Converter func(loggerAttr []slog.Attr, record *slog.Record) map[string]any
+var SourceKey = "source"
+var ErrorKeys = []string{"error", "err"}
 
-func DefaultConverter(loggerAttr []slog.Attr, record *slog.Record) map[string]any {
-	log := map[string]any{}
+type Converter func(addSource bool, replaceAttr func(groups []string, a slog.Attr) slog.Attr, loggerAttr []slog.Attr, groups []string, record *slog.Record) map[string]any
 
-	log["logger.name"] = name
-	log["logger.version"] = version
+func DefaultConverter(addSource bool, replaceAttr func(groups []string, a slog.Attr) slog.Attr, loggerAttr []slog.Attr, groups []string, record *slog.Record) map[string]any {
+	// aggregate all attributes
+	attrs := slogcommon.AppendRecordAttrsToAttrs(loggerAttr, groups, record)
 
-	attrToDatadogLog("", loggerAttr, &log)
-	record.Attrs(func(attr slog.Attr) bool {
-		attrToDatadogLog("", []slog.Attr{attr}, &log)
-		return true
-	})
+	// developer formatters
+	if addSource {
+		attrs = append(attrs, slogcommon.Source(SourceKey, record))
+	}
+	attrs = slogcommon.ReplaceAttrs(replaceAttr, []string{}, attrs...)
 
+	// handler formatter
+	log := map[string]any{
+		"logger.name":    name,
+		"logger.version": version,
+	}
+
+	attrToDatadogLog("", attrs, &log)
 	return log
 }
 
@@ -33,66 +40,27 @@ func attrToDatadogLog(base string, attrs []slog.Attr, log *map[string]any) {
 		v := attr.Value
 		kind := attr.Value.Kind()
 
-		if (attr.Key == "error" || attr.Key == "err") && kind == slog.KindAny {
-			if err, ok := attr.Value.Any().(error); ok {
-				kind, message, stack := buildExceptions(err)
-				(*log)[base+k+".kind"] = kind
-				(*log)[base+k+".message"] = message
-				(*log)[base+k+".stack"] = stack
-			} else {
-				attrToDatadogLog(base+k+".", v.Group(), log)
+		for _, errorKey := range ErrorKeys {
+			if attr.Key == errorKey && kind == slog.KindAny {
+				if err, ok := attr.Value.Any().(error); ok {
+					kind, message, stack := buildExceptions(err)
+					(*log)[base+k+".kind"] = kind
+					(*log)[base+k+".message"] = message
+					(*log)[base+k+".stack"] = stack
+				} else {
+					attrToDatadogLog(base+k+".", v.Group(), log)
+				}
 			}
-		} else if attr.Key == "user" && kind == slog.KindGroup {
+		}
+
+		if attr.Key == "user" && kind == slog.KindGroup {
 			attrToDatadogLog("usr.", v.Group(), log)
 		} else if kind == slog.KindGroup {
 			attrToDatadogLog(base+k+".", v.Group(), log)
 		} else {
-			(*log)[base+k] = attrToValue(v)
+			(*log)[base+k] = slogcommon.ValueToString(v)
 		}
 	}
-}
-
-func attrToValue(v slog.Value) string {
-	kind := v.Kind()
-
-	switch kind {
-	case slog.KindAny:
-		return anyValueToString(v)
-	case slog.KindLogValuer:
-		return anyValueToString(v)
-	case slog.KindGroup:
-		// not expected to reach this line
-		return anyValueToString(v)
-	case slog.KindInt64:
-		return fmt.Sprintf("%d", v.Int64())
-	case slog.KindUint64:
-		return fmt.Sprintf("%d", v.Uint64())
-	case slog.KindFloat64:
-		return fmt.Sprintf("%f", v.Float64())
-	case slog.KindString:
-		return v.String()
-	case slog.KindBool:
-		return strconv.FormatBool(v.Bool())
-	case slog.KindDuration:
-		return v.Duration().String()
-	case slog.KindTime:
-		return v.Time().UTC().String()
-	default:
-		return anyValueToString(v)
-	}
-}
-
-func anyValueToString(v slog.Value) string {
-	if tm, ok := v.Any().(encoding.TextMarshaler); ok {
-		data, err := tm.MarshalText()
-		if err != nil {
-			return ""
-		}
-
-		return string(data)
-	}
-
-	return fmt.Sprintf("%+v", v.Any())
 }
 
 func buildExceptions(err error) (kind string, message string, stack string) {

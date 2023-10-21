@@ -1,4 +1,4 @@
-module github.com/samber/slog-datadog
+module github.com/samber/slog-datadog/v2
 
 go 1.21
 

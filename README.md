@@ -43,16 +43,16 @@ A [Datadog](https://datadoghq.com) Handler for [slog](https://pkg.go.dev/log/slo
 ## 🚀 Install
 
 ```sh
-go get github.com/samber/slog-datadog
+go get github.com/samber/slog-datadog/v2
 ```
 
 **Compatibility**: go >= 1.21
 
-No breaking changes will be made to exported APIs before v2.0.0.
+No breaking changes will be made to exported APIs before v3.0.0.
 
 ## 💡 Usage
 
-GoDoc: [https://pkg.go.dev/github.com/samber/slog-datadog](https://pkg.go.dev/github.com/samber/slog-datadog)
+GoDoc: [https://pkg.go.dev/github.com/samber/slog-datadog/v2](https://pkg.go.dev/github.com/samber/slog-datadog/v2)
 
 ### Handler options
 
@@ -94,7 +94,7 @@ slogdatadog.ErrorKeys = []string{"error", "err"}
 ```go
 import (
 	"github.com/DataDog/datadog-api-client-go/v2/api/datadog"
-	slogdatadog "github.com/samber/slog-datadog"
+	slogdatadog "github.com/samber/slog-datadog/v2"
 	"log/slog"
 )
 

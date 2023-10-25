@@ -82,7 +82,8 @@ func (h *DatadogHandler) Handle(ctx context.Context, record slog.Record) error {
 	}
 
 	// @TODO: batching
-	return h.send(string(bytes))
+	go h.send(string(bytes))
+	return nil
 }
 
 func (h *DatadogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {

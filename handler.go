@@ -82,7 +82,9 @@ func (h *DatadogHandler) Handle(ctx context.Context, record slog.Record) error {
 	}
 
 	// @TODO: batching
-	go h.send(string(bytes))
+	go func() {
+		_ = h.send(string(bytes))
+	}()
 	return nil
 }
 

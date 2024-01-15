@@ -25,8 +25,11 @@ func DefaultConverter(addSource bool, replaceAttr func(groups []string, a slog.A
 
 	// handler formatter
 	log := map[string]any{
+		"@timestamp":     record.Time.UTC(),
 		"logger.name":    name,
 		"logger.version": version,
+		"level":          record.Level.String(),
+		"message":        record.Message,
 	}
 
 	attrToDatadogLog("", attrs, &log)

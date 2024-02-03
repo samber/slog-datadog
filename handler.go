@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"log/slog"
 
@@ -21,6 +22,7 @@ type Option struct {
 	// datadog endpoint
 	Client  *datadog.APIClient
 	Context context.Context
+	Timeout time.Duration // default: 10s
 	// batching (default: disabled)
 	// Batching bool	// @TODO
 
@@ -48,6 +50,10 @@ func (o Option) NewDatadogHandler() slog.Handler {
 
 	if o.Context == nil {
 		o.Context = context.Background()
+	}
+
+	if o.Timeout == 0 {
+		o.Timeout = 10 * time.Second
 	}
 
 	return &DatadogHandler{
@@ -122,7 +128,10 @@ func (h *DatadogHandler) send(message string) error {
 		},
 	}
 
+	ctx, cancel := context.WithTimeout(h.option.Context, h.option.Timeout)
+	defer cancel()
+
 	api := datadogV2.NewLogsApi(h.option.Client)
-	_, _, err := api.SubmitLog(h.option.Context, body, *datadogV2.NewSubmitLogOptionalParameters().WithContentEncoding(datadogV2.CONTENTENCODING_DEFLATE))
+	_, _, err := api.SubmitLog(ctx, body, *datadogV2.NewSubmitLogOptionalParameters().WithContentEncoding(datadogV2.CONTENTENCODING_DEFLATE))
 	return err
 }

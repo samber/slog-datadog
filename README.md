@@ -67,6 +67,7 @@ type Option struct {
 	// datadog endpoint
 	Client  *datadog.APIClient
 	Context context.Context
+	Timeout time.Duration	// default: 10s
 
 	// source parameters
 	Service    string
@@ -125,7 +126,7 @@ func main() {
 	apiKey := "xxx"
 	apiClient, ctx := newDatadogClient(endpoint, apiKey)
 
-	logger := slog.New(slogdatadog.Option{Level: slog.LevelDebug, Client: apiClient, Context: ctx, Hostname: host, Service: service}.NewDatadogHandler())
+	logger := slog.New(slogdatadog.Option{Level: slog.LevelDebug, Client: apiClient, Context: ctx, Timeout: 5*time.Second, Hostname: host, Service: service}.NewDatadogHandler())
 	logger = logger.
 		With("environment", "dev").
 		With("release", "v1.0.0")

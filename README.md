@@ -76,6 +76,8 @@ type Option struct {
 
 	// optional: customize Datadog message builder
 	Converter Converter
+	// optional:
+	Marshaler func(v any) ([]byte, error)
 
 	// optional: see slog.HandlerOptions
 	AddSource   bool

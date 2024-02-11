@@ -36,7 +36,14 @@ func main() {
 	apiKey := "xxxxx"
 	apiClient, ctx := newDatadogClient(endpoint, apiKey)
 
-	logger := slog.New(slogdatadog.Option{Level: slog.LevelDebug, Client: apiClient, Context: ctx, Hostname: host, Service: service}.NewDatadogHandler())
+	logger := slog.New(slogdatadog.Option{
+		Level:     slog.LevelDebug,
+		Client:    apiClient,
+		Context:   ctx,
+		Hostname:  host,
+		Service:   service,
+		AddSource: true,
+	}.NewDatadogHandler())
 	logger = logger.With("release", "v1.0.0")
 
 	logger.

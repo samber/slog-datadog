@@ -33,6 +33,8 @@ type Option struct {
 
 	// optional: customize Datadog message builder
 	Converter Converter
+	// optional:
+	Marshaler func(v any) ([]byte, error)
 
 	// optional: see slog.HandlerOptions
 	AddSource   bool
@@ -56,6 +58,14 @@ func (o Option) NewDatadogHandler() slog.Handler {
 		o.Timeout = 10 * time.Second
 	}
 
+	if o.Converter == nil {
+		o.Converter = DefaultConverter
+	}
+
+	if o.Marshaler == nil {
+		o.Marshaler = json.Marshal
+	}
+
 	return &DatadogHandler{
 		option: o,
 		attrs:  []slog.Attr{},
@@ -76,13 +86,8 @@ func (h *DatadogHandler) Enabled(_ context.Context, level slog.Level) bool {
 }
 
 func (h *DatadogHandler) Handle(ctx context.Context, record slog.Record) error {
-	converter := DefaultConverter
-	if h.option.Converter != nil {
-		converter = h.option.Converter
-	}
-
-	log := converter(h.option.AddSource, h.option.ReplaceAttr, h.attrs, h.groups, &record)
-	bytes, err := json.Marshal(log)
+	log := h.option.Converter(h.option.AddSource, h.option.ReplaceAttr, h.attrs, h.groups, &record)
+	bytes, err := h.option.Marshaler(log)
 	if err != nil {
 		return err
 	}

@@ -70,7 +70,6 @@ GoDoc: [https://pkg.go.dev/github.com/samber/slog-datadog/v2](https://pkg.go.dev
 ### Handler options
 
 ```go
-
 type Option struct {
 	// log level (default: debug)
 	Level slog.Leveler
@@ -89,6 +88,8 @@ type Option struct {
 	Converter Converter
 	// optional: custom marshaler
 	Marshaler func(v any) ([]byte, error)
+	// optional: fetch attributes from context
+	AttrFromContext []func(ctx context.Context) []slog.Attr
 
 	// optional: see slog.HandlerOptions
 	AddSource   bool
@@ -161,6 +162,41 @@ func main() {
 			),
 		).
 		Info("user registration")
+}
+```
+
+### Tracing
+
+Import the samber/slog-otel library.
+
+```go
+import (
+	slogdatadog "github.com/samber/slog-datadog"
+	slogotel "github.com/samber/slog-otel"
+	"go.opentelemetry.io/otel/sdk/trace"
+)
+
+func main() {
+	tp := trace.NewTracerProvider(
+		trace.WithSampler(trace.AlwaysSample()),
+	)
+	tracer := tp.Tracer("hello/world")
+
+	ctx, span := tracer.Start(context.Background(), "foo")
+	defer span.End()
+
+	span.AddEvent("bar")
+
+	logger := slog.New(
+		slogdatadog.Option{
+			// ...
+			AttrFromContext: []func(ctx context.Context) []slog.Attr{
+				slogotel.ExtractOtelAttrFromContext([]string{"tracing"}, "trace_id", "span_id"),
+			},
+		}.NewDatadogHandler(),
+	)
+
+	logger.ErrorContext(ctx, "a message")
 }
 ```
 

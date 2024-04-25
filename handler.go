@@ -35,6 +35,8 @@ type Option struct {
 	Converter Converter
 	// optional: custom marshaler
 	Marshaler func(v any) ([]byte, error)
+	// optional: fetch attributes from context
+	AttrFromContext []func(ctx context.Context) []slog.Attr
 
 	// optional: see slog.HandlerOptions
 	AddSource   bool
@@ -66,6 +68,10 @@ func (o Option) NewDatadogHandler() slog.Handler {
 		o.Marshaler = json.Marshal
 	}
 
+	if o.AttrFromContext == nil {
+		o.AttrFromContext = []func(ctx context.Context) []slog.Attr{}
+	}
+
 	return &DatadogHandler{
 		option: o,
 		attrs:  []slog.Attr{},
@@ -86,7 +92,9 @@ func (h *DatadogHandler) Enabled(_ context.Context, level slog.Level) bool {
 }
 
 func (h *DatadogHandler) Handle(ctx context.Context, record slog.Record) error {
-	log := h.option.Converter(h.option.AddSource, h.option.ReplaceAttr, h.attrs, h.groups, &record)
+	fromContext := slogcommon.ContextExtractor(ctx, h.option.AttrFromContext)
+	log := h.option.Converter(h.option.AddSource, h.option.ReplaceAttr, append(h.attrs, fromContext...), h.groups, &record)
+
 	bytes, err := h.option.Marshaler(log)
 	if err != nil {
 		return err

@@ -100,10 +100,12 @@ func (h *DatadogHandler) Handle(ctx context.Context, record slog.Record) error {
 		return err
 	}
 
-	// @TODO: batching
+	// non-blocking
 	go func() {
+		// @TODO: batching
 		_ = h.send(string(bytes))
 	}()
+
 	return nil
 }
 

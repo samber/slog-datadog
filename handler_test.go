@@ -32,7 +32,7 @@ func TestArgFormatting(t *testing.T) {
 	bytes, err := handle(ddh, context.Background(), r)
 
 	if err != nil {
-		t.Errorf("handle() error = %v", err)
+		t.Fatalf("handle() error = %v", err)
 	}
 
 	var data map[string]any
@@ -54,6 +54,6 @@ func TestArgFormatting(t *testing.T) {
 	}
 
 	if !reflect.DeepEqual(expected, data) {
-		t.Errorf("Expected\n  %v\nGot\n  %v", expected, data)
+		t.Fatalf("Expected\n  %v\nGot\n  %v", expected, data)
 	}
 }

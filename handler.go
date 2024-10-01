@@ -92,10 +92,7 @@ func (h *DatadogHandler) Enabled(_ context.Context, level slog.Level) bool {
 }
 
 func (h *DatadogHandler) Handle(ctx context.Context, record slog.Record) error {
-	fromContext := slogcommon.ContextExtractor(ctx, h.option.AttrFromContext)
-	log := h.option.Converter(h.option.AddSource, h.option.ReplaceAttr, append(h.attrs, fromContext...), h.groups, &record)
-
-	bytes, err := h.option.Marshaler(log)
+	bytes, err := handle(h, ctx, record)
 	if err != nil {
 		return err
 	}
@@ -107,6 +104,13 @@ func (h *DatadogHandler) Handle(ctx context.Context, record slog.Record) error {
 	}()
 
 	return nil
+}
+
+func handle(h *DatadogHandler, ctx context.Context, record slog.Record) ([]byte, error) {
+	fromContext := slogcommon.ContextExtractor(ctx, h.option.AttrFromContext)
+	log := h.option.Converter(h.option.AddSource, h.option.ReplaceAttr, append(h.attrs, fromContext...), h.groups, &record)
+
+	return h.option.Marshaler(log)
 }
 
 func (h *DatadogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {

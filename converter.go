@@ -59,10 +59,23 @@ func attrToDatadogLog(base string, attrs []slog.Attr, log *map[string]any) {
 
 		if attr.Key == "user" && kind == slog.KindGroup {
 			attrToDatadogLog("usr.", v.Group(), log)
-		} else if kind == slog.KindGroup {
-			attrToDatadogLog(base+k+".", v.Group(), log)
 		} else {
-			(*log)[base+k] = slogcommon.ValueToString(v)
+			switch kind {
+			case slog.KindGroup:
+				attrToDatadogLog(base+k+".", v.Group(), log)
+			case slog.KindBool:
+				(*log)[base+k] = v.Bool()
+			case slog.KindFloat64:
+				(*log)[base+k] = v.Float64()
+			case slog.KindInt64:
+				(*log)[base+k] = v.Int64()
+			case slog.KindString:
+				(*log)[base+k] = v.String()
+			case slog.KindAny:
+				(*log)[base+k] = v.Any()
+			default:
+				(*log)[base+k] = slogcommon.ValueToString(v)
+			}
 		}
 	}
 }

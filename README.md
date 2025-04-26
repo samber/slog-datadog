@@ -2,7 +2,7 @@
 # slog: Datadog handler
 
 [![tag](https://img.shields.io/github/tag/samber/slog-datadog.svg)](https://github.com/samber/slog-datadog/releases)
-![Go Version](https://img.shields.io/badge/Go-%3E%3D%201.21-%23007d9c)
+![Go Version](https://img.shields.io/badge/Go-%3E%3D%201.22-%23007d9c)
 [![GoDoc](https://godoc.org/github.com/samber/slog-datadog?status.svg)](https://pkg.go.dev/github.com/samber/slog-datadog)
 ![Build Status](https://github.com/samber/slog-datadog/actions/workflows/test.yml/badge.svg)
 [![Go report](https://goreportcard.com/badge/github.com/samber/slog-datadog)](https://goreportcard.com/report/github.com/samber/slog-datadog)

@@ -28,6 +28,8 @@ type Option struct {
 
 	// source parameters
 	Service    string
+	// source (optional): Allows overriding the `source` field sent to DD. defaulted to version.name
+	Source     string
 	Hostname   string
 	GlobalTags map[string]string
 
@@ -142,9 +144,14 @@ func (h *DatadogHandler) send(message string) error {
 		}
 	}
 
+	source := h.option.Source
+	if source == "" {
+		source = name
+	}
+	
 	body := []datadogV2.HTTPLogItem{
 		{
-			Ddsource: datadog.PtrString(name),
+			Ddsource: datadog.PtrString(source),
 			Hostname: datadog.PtrString(h.option.Hostname),
 			Service:  datadog.PtrString(h.option.Service),
 			Ddtags:   datadog.PtrString(strings.Join(tags, ",")),

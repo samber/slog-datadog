@@ -98,6 +98,7 @@ type Option struct {
 
 	// source parameters
 	Service    string
+	Source     string
 	Hostname   string
 	GlobalTags map[string]string
 

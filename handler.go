@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"log/slog"
@@ -23,11 +24,14 @@ type Option struct {
 	Client  *datadog.APIClient
 	Context context.Context
 	Timeout time.Duration // default: 10s
+
 	// batching (default: disabled)
-	// Batching bool	// @TODO
+	Batching      bool
+	BatchDuration time.Duration // default: 5s
+	MaxBatchSize  int           // default: 0 (no limit)
 
 	// source parameters
-	Service    string
+	Service string
 	// source (optional): Allows overriding the `source` field sent to DD. defaulted to version.name
 	Source     string
 	Hostname   string
@@ -74,11 +78,23 @@ func (o Option) NewDatadogHandler() slog.Handler {
 		o.AttrFromContext = []func(ctx context.Context) []slog.Attr{}
 	}
 
-	return &DatadogHandler{
+	if o.BatchDuration == 0 {
+		o.BatchDuration = 5 * time.Second
+	}
+
+	handler := &DatadogHandler{
 		option: o,
 		attrs:  []slog.Attr{},
 		groups: []string{},
 	}
+
+	// Start the buffer processing goroutine if batching is enabled
+	if o.Batching {
+		handler.bufferTimer = time.NewTimer(o.BatchDuration)
+		go handler.processBuffer()
+	}
+
+	return handler
 }
 
 var _ slog.Handler = (*DatadogHandler)(nil)
@@ -87,6 +103,14 @@ type DatadogHandler struct {
 	option Option
 	attrs  []slog.Attr
 	groups []string
+
+	// If batching is enabled, we need to store the logs in a buffer
+	buffer   []string
+	bufferMu sync.Mutex
+
+	// The timer is used to flush the buffer periodically
+	bufferTimer   *time.Timer
+	bufferTimerMu sync.Mutex
 }
 
 func (h *DatadogHandler) Enabled(_ context.Context, level slog.Level) bool {
@@ -99,10 +123,21 @@ func (h *DatadogHandler) Handle(ctx context.Context, record slog.Record) error {
 		return err
 	}
 
+	if h.option.Batching {
+		h.bufferMu.Lock()
+		defer h.bufferMu.Unlock()
+
+		h.buffer = append(h.buffer, string(bytes))
+		if len(h.buffer) == h.option.MaxBatchSize && h.option.MaxBatchSize > 0 {
+			// if the buffer is full, schedule a flush immediately
+			h.scheduleFlush(0)
+		}
+		return nil
+	}
+
 	// non-blocking
 	go func() {
-		// @TODO: batching
-		_ = h.send(string(bytes))
+		_ = h.send([]string{string(bytes)})
 	}()
 
 	return nil
@@ -136,7 +171,73 @@ func (h *DatadogHandler) WithGroup(name string) slog.Handler {
 	}
 }
 
-func (h *DatadogHandler) send(message string) error {
+func (h *DatadogHandler) Flush(ctx context.Context) error {
+	errChan := make(chan error)
+	go func() {
+		errChan <- h.flushBuffer()
+	}()
+
+	select {
+	case err := <-errChan:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (h *DatadogHandler) flushBuffer() error {
+	h.bufferMu.Lock()
+	messages := h.buffer
+	h.buffer = nil
+	h.bufferMu.Unlock()
+
+	if len(messages) == 0 {
+		return nil
+	}
+
+	return h.send(messages)
+}
+
+func (h *DatadogHandler) stopBufferTimer() {
+	h.bufferTimerMu.Lock()
+	defer h.bufferTimerMu.Unlock()
+
+	// Stop the timer if it's running
+	if !h.bufferTimer.Stop() {
+		// Drain stale value if timer fired before stopped
+		<-h.bufferTimer.C
+	}
+}
+
+func (h *DatadogHandler) scheduleFlush(duration time.Duration) {
+	h.bufferTimerMu.Lock()
+	defer h.bufferTimerMu.Unlock()
+
+	// Stop the timer if it's running
+	if !h.bufferTimer.Stop() {
+		// Drain stale value if timer fired before stopped
+		<-h.bufferTimer.C
+	}
+
+	// Reset the timer to the new duration
+	h.bufferTimer.Reset(duration)
+}
+
+func (h *DatadogHandler) processBuffer() {
+	for {
+		select {
+		case <-h.option.Context.Done():
+			_ = h.flushBuffer()
+			h.stopBufferTimer()
+			return
+		case <-h.bufferTimer.C:
+			_ = h.flushBuffer()
+			h.scheduleFlush(h.option.BatchDuration)
+		}
+	}
+}
+
+func (h *DatadogHandler) send(messages []string) error {
 	var tags []string
 	if h.option.GlobalTags != nil {
 		for key, value := range h.option.GlobalTags {
@@ -148,15 +249,16 @@ func (h *DatadogHandler) send(message string) error {
 	if source == "" {
 		source = name
 	}
-	
-	body := []datadogV2.HTTPLogItem{
-		{
+
+	body := make([]datadogV2.HTTPLogItem, len(messages))
+	for i, message := range messages {
+		body[i] = datadogV2.HTTPLogItem{
 			Ddsource: datadog.PtrString(source),
 			Hostname: datadog.PtrString(h.option.Hostname),
 			Service:  datadog.PtrString(h.option.Service),
 			Ddtags:   datadog.PtrString(strings.Join(tags, ",")),
 			Message:  message,
-		},
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(h.option.Context, h.option.Timeout)

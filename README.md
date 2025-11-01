@@ -96,6 +96,10 @@ type Option struct {
 	Context context.Context
 	Timeout time.Duration	// default: 10s
 
+	// batching (default: disabled)
+	Batching      bool
+	BatchDuration time.Duration // default: 5s
+
 	// source parameters
 	Service    string
 	Source     string
@@ -182,6 +186,75 @@ func main() {
 		Info("user registration")
 }
 ```
+
+### Batching
+
+To improve performance and reduce network overhead, you can enable batching to send multiple log entries in a single request:
+
+```go
+import (
+	"context"
+	"github.com/DataDog/datadog-api-client-go/v2/api/datadog"
+	slogdatadog "github.com/samber/slog-datadog/v2"
+	"log/slog"
+	"time"
+)
+
+func main() {
+	host := "1.2.3.4"
+	service := "api"
+	endpoint := slogdatadog.DatadogHostEU
+	apiKey := "xxx"
+	apiClient, ctx := newDatadogClient(endpoint, apiKey)
+
+	// Logs are flushed when the provided context is cancelled. This is
+	// needed to prevent goroutine leaks when using the batching feature.
+	ctx, cancel := context.WithCancel(ctx)
+
+	handler := slogdatadog.Option{
+		Level:         slog.LevelDebug,
+		Client:        apiClient,
+		Context:       ctx,
+		Timeout:       5 * time.Second,
+		Hostname:      host,
+		Service:       service,
+		Batching:      true,             // Enable batching
+		BatchDuration: 10 * time.Second, // Send logs every 10 seconds (default: 5s)
+	}.NewDatadogHandler()
+
+	// Stop the batching goroutine and flush any remaining logs w/ a 5s timeout
+	defer func() {
+		cancel()
+		handler.Flush(context.WithTimeout(context.Background(), 5*time.Second))
+	}()
+
+	logger := slog.New(handler)
+
+	logger = logger.
+		With("environment", "dev").
+		With("release", "v1.0.0")
+
+	// log error
+	logger.
+		With("category", "sql").
+		With("query.statement", "SELECT COUNT(*) FROM users;").
+		With("query.duration", 1*time.Second).
+		With("error", fmt.Errorf("could not count users")).
+		Error("caramba!")
+
+	// log user signup
+	logger.
+		With(
+			slog.Group("user",
+				slog.String("id", "user-123"),
+				slog.Time("created_at", time.Now()),
+			),
+		).
+		Info("user registration")
+}
+```
+
+When batching is enabled, logs are buffered in memory and sent to Datadog periodically based on `BatchDuration`. This significantly reduces the number of API calls and improves throughput for high-volume logging scenarios.
 
 ### Tracing
 

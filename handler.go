@@ -105,8 +105,9 @@ type DatadogHandler struct {
 	groups []string
 
 	// If batching is enabled, we need to store the logs in a buffer
-	buffer   []string
-	bufferMu sync.Mutex
+	buffer                  []string
+	immediateFlushScheduled bool
+	bufferMu                sync.Mutex
 
 	// The timer is used to flush the buffer periodically
 	bufferTimer   *time.Timer
@@ -128,8 +129,11 @@ func (h *DatadogHandler) Handle(ctx context.Context, record slog.Record) error {
 		defer h.bufferMu.Unlock()
 
 		h.buffer = append(h.buffer, string(bytes))
-		if len(h.buffer) == h.option.MaxBatchSize && h.option.MaxBatchSize > 0 {
+		if h.option.MaxBatchSize > 0 &&
+			len(h.buffer) >= h.option.MaxBatchSize &&
+			!h.immediateFlushScheduled {
 			// if the buffer is full, schedule a flush immediately
+			h.immediateFlushScheduled = true
 			h.scheduleFlush(0)
 		}
 		return nil
@@ -189,6 +193,7 @@ func (h *DatadogHandler) flushBuffer() error {
 	h.bufferMu.Lock()
 	messages := h.buffer
 	h.buffer = nil
+	h.immediateFlushScheduled = false
 	h.bufferMu.Unlock()
 
 	if len(messages) == 0 {
@@ -216,7 +221,11 @@ func (h *DatadogHandler) scheduleFlush(duration time.Duration) {
 	// Stop the timer if it's running
 	if !h.bufferTimer.Stop() {
 		// Drain stale value if timer fired before stopped
-		<-h.bufferTimer.C
+		// This is a non-blocking read in case processBuffer reads the channel here.
+		select {
+		case <-h.bufferTimer.C:
+		default:
+		}
 	}
 
 	// Reset the timer to the new duration
@@ -232,7 +241,23 @@ func (h *DatadogHandler) processBuffer() {
 			return
 		case <-h.bufferTimer.C:
 			_ = h.flushBuffer()
-			h.scheduleFlush(h.option.BatchDuration)
+
+			// Check if buffer filled up again during the flush
+			// If immediateFlushScheduled is true, Handle() already scheduled a flush, so don't schedule again
+			// Otherwise, schedule based on buffer size
+			h.bufferMu.Lock()
+			if !h.immediateFlushScheduled {
+				if h.option.MaxBatchSize > 0 && len(h.buffer) >= h.option.MaxBatchSize {
+					// Buffer is still full, flush immediately
+					h.scheduleFlush(0)
+					h.immediateFlushScheduled = true
+				} else {
+					// Buffer is below threshold, use normal periodic duration
+					h.scheduleFlush(h.option.BatchDuration)
+				}
+			}
+			h.bufferMu.Unlock()
+
 		}
 	}
 }

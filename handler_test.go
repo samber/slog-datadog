@@ -157,7 +157,7 @@ func TestBatchingEnabled(t *testing.T) {
 			logger := tc.createLogger(handler)
 
 			// Log messages
-			for i := 0; i < 3; i++ {
+			for i := range 3 {
 				logger.Info("message", "index", i)
 			}
 
@@ -205,7 +205,7 @@ func TestBatchingMaxBatchSize(t *testing.T) {
 
 	// Log exactly maxBatchSize messages
 	logger := slog.New(handler)
-	for i := 0; i < maxBatchSize; i++ {
+	for i := range maxBatchSize {
 		logger.Info("message", "index", i)
 	}
 
@@ -222,7 +222,7 @@ func TestBatchingMaxBatchSize(t *testing.T) {
 	}
 
 	// Log more messages
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		logger.Info("message after flush", "index", i)
 	}
 
@@ -448,9 +448,9 @@ func TestBatchingConcurrentWrites(t *testing.T) {
 	const messagesPerGoroutine = 100
 	done := make(chan bool, numGoroutines)
 
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		go func(id int) {
-			for j := 0; j < messagesPerGoroutine; j++ {
+			for j := range messagesPerGoroutine {
 				logger.Info("concurrent message", "goroutine", id, "msg", j)
 			}
 			done <- true
@@ -458,7 +458,7 @@ func TestBatchingConcurrentWrites(t *testing.T) {
 	}
 
 	// Wait for all goroutines to complete
-	for i := 0; i < numGoroutines; i++ {
+	for range numGoroutines {
 		<-done
 	}
 
@@ -499,7 +499,7 @@ func TestBatchingConcurrentFlushes(t *testing.T) {
 	logger := slog.New(handler)
 
 	// Add some messages
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		logger.Info("message", "index", i)
 	}
 
@@ -507,7 +507,7 @@ func TestBatchingConcurrentFlushes(t *testing.T) {
 	const numFlushes = 5
 	done := make(chan error, numFlushes)
 
-	for i := 0; i < numFlushes; i++ {
+	for range numFlushes {
 		go func() {
 			flushCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
 			defer cancel()
@@ -516,7 +516,7 @@ func TestBatchingConcurrentFlushes(t *testing.T) {
 	}
 
 	// Wait for all flushes to complete
-	for i := 0; i < numFlushes; i++ {
+	for range numFlushes {
 		<-done
 		// We ignore errors since we don't have valid credentials
 	}
@@ -556,8 +556,8 @@ func TestBatchingRaceCondition(t *testing.T) {
 	// might also be reading from the timer channel
 	done := make(chan bool)
 	go func() {
-		for i := 0; i < 100; i++ {
-			for j := 0; j < 5; j++ {
+		for i := range 100 {
+			for j := range 5 {
 				logger.Info("message", "batch", i, "msg", j)
 			}
 			// Small delay to let timer fire
@@ -614,7 +614,7 @@ func TestBatchingOverflowAfterScheduledFlush(t *testing.T) {
 	// flushes continue to trigger as buffer refills after each flush.
 	const totalMessages = 50
 
-	for i := 0; i < totalMessages; i++ {
+	for i := range totalMessages {
 		logger.Info("message", "index", i)
 
 		// Small delay every 10 messages to allow some flushes to complete

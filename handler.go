@@ -90,7 +90,9 @@ func (o Option) NewDatadogHandler() slog.Handler {
 
 	// Start the buffer processing goroutine if batching is enabled
 	if o.Batching {
-		handler.bufferTimer = time.NewTimer(o.BatchDuration)
+		handler.batch = &batchState{
+			bufferTimer: time.NewTimer(o.BatchDuration),
+		}
 		go handler.processBuffer()
 	}
 
@@ -99,19 +101,19 @@ func (o Option) NewDatadogHandler() slog.Handler {
 
 var _ slog.Handler = (*DatadogHandler)(nil)
 
+type batchState struct {
+	buffer                  []string
+	immediateFlushScheduled bool
+	bufferMu                sync.Mutex
+	bufferTimer             *time.Timer
+	bufferTimerMu           sync.Mutex
+}
+
 type DatadogHandler struct {
 	option Option
 	attrs  []slog.Attr
 	groups []string
-
-	// If batching is enabled, we need to store the logs in a buffer
-	buffer                  []string
-	immediateFlushScheduled bool
-	bufferMu                sync.Mutex
-
-	// The timer is used to flush the buffer periodically
-	bufferTimer   *time.Timer
-	bufferTimerMu sync.Mutex
+	batch  *batchState // nil when batching is disabled
 }
 
 func (h *DatadogHandler) Enabled(_ context.Context, level slog.Level) bool {
@@ -125,15 +127,15 @@ func (h *DatadogHandler) Handle(ctx context.Context, record slog.Record) error {
 	}
 
 	if h.option.Batching {
-		h.bufferMu.Lock()
-		defer h.bufferMu.Unlock()
+		h.batch.bufferMu.Lock()
+		defer h.batch.bufferMu.Unlock()
 
-		h.buffer = append(h.buffer, string(bytes))
+		h.batch.buffer = append(h.batch.buffer, string(bytes))
 		if h.option.MaxBatchSize > 0 &&
-			len(h.buffer) >= h.option.MaxBatchSize &&
-			!h.immediateFlushScheduled {
+			len(h.batch.buffer) >= h.option.MaxBatchSize &&
+			!h.batch.immediateFlushScheduled {
 			// if the buffer is full, schedule a flush immediately
-			h.immediateFlushScheduled = true
+			h.batch.immediateFlushScheduled = true
 			h.scheduleFlush(0)
 		}
 		return nil
@@ -159,6 +161,7 @@ func (h *DatadogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 		option: h.option,
 		attrs:  slogcommon.AppendAttrsToGroup(h.groups, h.attrs, attrs...),
 		groups: h.groups,
+		batch:  h.batch, // Share batching state with parent handler
 	}
 }
 
@@ -172,6 +175,7 @@ func (h *DatadogHandler) WithGroup(name string) slog.Handler {
 		option: h.option,
 		attrs:  h.attrs,
 		groups: append(h.groups, name),
+		batch:  h.batch, // Share batching state with parent handler
 	}
 }
 
@@ -190,11 +194,11 @@ func (h *DatadogHandler) Flush(ctx context.Context) error {
 }
 
 func (h *DatadogHandler) flushBuffer() error {
-	h.bufferMu.Lock()
-	messages := h.buffer
-	h.buffer = nil
-	h.immediateFlushScheduled = false
-	h.bufferMu.Unlock()
+	h.batch.bufferMu.Lock()
+	messages := h.batch.buffer
+	h.batch.buffer = nil
+	h.batch.immediateFlushScheduled = false
+	h.batch.bufferMu.Unlock()
 
 	if len(messages) == 0 {
 		return nil
@@ -204,32 +208,32 @@ func (h *DatadogHandler) flushBuffer() error {
 }
 
 func (h *DatadogHandler) stopBufferTimer() {
-	h.bufferTimerMu.Lock()
-	defer h.bufferTimerMu.Unlock()
+	h.batch.bufferTimerMu.Lock()
+	defer h.batch.bufferTimerMu.Unlock()
 
 	// Stop the timer if it's running
-	if !h.bufferTimer.Stop() {
+	if !h.batch.bufferTimer.Stop() {
 		// Drain stale value if timer fired before stopped
-		<-h.bufferTimer.C
+		<-h.batch.bufferTimer.C
 	}
 }
 
 func (h *DatadogHandler) scheduleFlush(duration time.Duration) {
-	h.bufferTimerMu.Lock()
-	defer h.bufferTimerMu.Unlock()
+	h.batch.bufferTimerMu.Lock()
+	defer h.batch.bufferTimerMu.Unlock()
 
 	// Stop the timer if it's running
-	if !h.bufferTimer.Stop() {
+	if !h.batch.bufferTimer.Stop() {
 		// Drain stale value if timer fired before stopped
 		// This is a non-blocking read in case processBuffer reads the channel here.
 		select {
-		case <-h.bufferTimer.C:
+		case <-h.batch.bufferTimer.C:
 		default:
 		}
 	}
 
 	// Reset the timer to the new duration
-	h.bufferTimer.Reset(duration)
+	h.batch.bufferTimer.Reset(duration)
 }
 
 func (h *DatadogHandler) processBuffer() {
@@ -239,24 +243,24 @@ func (h *DatadogHandler) processBuffer() {
 			_ = h.flushBuffer()
 			h.stopBufferTimer()
 			return
-		case <-h.bufferTimer.C:
+		case <-h.batch.bufferTimer.C:
 			_ = h.flushBuffer()
 
 			// Check if buffer filled up again during the flush
 			// If immediateFlushScheduled is true, Handle() already scheduled a flush, so don't schedule again
 			// Otherwise, schedule based on buffer size
-			h.bufferMu.Lock()
-			if !h.immediateFlushScheduled {
-				if h.option.MaxBatchSize > 0 && len(h.buffer) >= h.option.MaxBatchSize {
+			h.batch.bufferMu.Lock()
+			if !h.batch.immediateFlushScheduled {
+				if h.option.MaxBatchSize > 0 && len(h.batch.buffer) >= h.option.MaxBatchSize {
 					// Buffer is still full, flush immediately
 					h.scheduleFlush(0)
-					h.immediateFlushScheduled = true
+					h.batch.immediateFlushScheduled = true
 				} else {
 					// Buffer is below threshold, use normal periodic duration
 					h.scheduleFlush(h.option.BatchDuration)
 				}
 			}
-			h.bufferMu.Unlock()
+			h.batch.bufferMu.Unlock()
 
 		}
 	}

@@ -105,13 +105,9 @@ func TestBatchingDisabled(t *testing.T) {
 	logger.Info("message 2")
 	logger.Info("message 3")
 
-	// When batching is disabled, buffer should remain empty
-	ddh.bufferMu.Lock()
-	bufferLen := len(ddh.buffer)
-	ddh.bufferMu.Unlock()
-
-	if bufferLen != 0 {
-		t.Errorf("Expected buffer to be empty when batching is disabled, got %d items", bufferLen)
+	// When batching is disabled, batch state is nil (not allocated)
+	if ddh.batch != nil {
+		t.Errorf("Expected batch to be nil when batching is disabled")
 	}
 }
 
@@ -122,40 +118,70 @@ func TestBatchingEnabled(t *testing.T) {
 	client, cleanup := createTestClient()
 	defer cleanup()
 
-	handler := Option{
-		Client:        client,
-		Context:       ctx,
-		Batching:      true,
-		BatchDuration: 500 * time.Millisecond,
-	}.NewDatadogHandler()
-
-	ddh := handler.(*DatadogHandler)
-
-	// Log some messages
-	logger := slog.New(handler)
-	logger.Info("message 1")
-	logger.Info("message 2")
-	logger.Info("message 3")
-
-	// Verify messages are buffered
-	ddh.bufferMu.Lock()
-	bufferLen := len(ddh.buffer)
-	ddh.bufferMu.Unlock()
-
-	if bufferLen != 3 {
-		t.Errorf("Expected 3 messages in buffer, got %d", bufferLen)
+	testCases := []struct {
+		name         string
+		createLogger func(base slog.Handler) *slog.Logger
+	}{
+		{
+			name: "parent handler",
+			createLogger: func(base slog.Handler) *slog.Logger {
+				return slog.New(base)
+			},
+		},
+		{
+			name: "WithAttrs handler",
+			createLogger: func(base slog.Handler) *slog.Logger {
+				return slog.New(base.WithAttrs([]slog.Attr{slog.String("test", "value")}))
+			},
+		},
+		{
+			name: "WithGroup handler",
+			createLogger: func(base slog.Handler) *slog.Logger {
+				return slog.New(base.WithGroup("group"))
+			},
+		},
 	}
 
-	// Wait for batch duration to trigger flush
-	time.Sleep(600 * time.Millisecond)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := Option{
+				Client:        client,
+				Context:       ctx,
+				Batching:      true,
+				BatchDuration: 500 * time.Millisecond,
+			}.NewDatadogHandler()
 
-	// Buffer should be empty after flush
-	ddh.bufferMu.Lock()
-	bufferLen = len(ddh.buffer)
-	ddh.bufferMu.Unlock()
+			ddh := handler.(*DatadogHandler)
 
-	if bufferLen != 0 {
-		t.Errorf("Expected buffer to be empty after flush, got %d items", bufferLen)
+			// Create logger using the test case's factory
+			logger := tc.createLogger(handler)
+
+			// Log messages
+			for i := range 3 {
+				logger.Info("message", "index", i)
+			}
+
+			// Verify messages are buffered
+			ddh.batch.bufferMu.Lock()
+			bufferLen := len(ddh.batch.buffer)
+			ddh.batch.bufferMu.Unlock()
+
+			if bufferLen != 3 {
+				t.Errorf("Expected 3 messages in buffer, got %d", bufferLen)
+			}
+
+			// Wait for batch duration to trigger flush
+			time.Sleep(600 * time.Millisecond)
+
+			// Buffer should be empty after flush
+			ddh.batch.bufferMu.Lock()
+			bufferLen = len(ddh.batch.buffer)
+			ddh.batch.bufferMu.Unlock()
+
+			if bufferLen != 0 {
+				t.Errorf("Expected buffer to be empty after flush, got %d items", bufferLen)
+			}
+		})
 	}
 }
 
@@ -179,7 +205,7 @@ func TestBatchingMaxBatchSize(t *testing.T) {
 
 	// Log exactly maxBatchSize messages
 	logger := slog.New(handler)
-	for i := 0; i < maxBatchSize; i++ {
+	for i := range maxBatchSize {
 		logger.Info("message", "index", i)
 	}
 
@@ -187,23 +213,23 @@ func TestBatchingMaxBatchSize(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Buffer should be empty after flush
-	ddh.bufferMu.Lock()
-	bufferLen := len(ddh.buffer)
-	ddh.bufferMu.Unlock()
+	ddh.batch.bufferMu.Lock()
+	bufferLen := len(ddh.batch.buffer)
+	ddh.batch.bufferMu.Unlock()
 
 	if bufferLen != 0 {
 		t.Errorf("Expected buffer to be empty after reaching MaxBatchSize, got %d items", bufferLen)
 	}
 
 	// Log more messages
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		logger.Info("message after flush", "index", i)
 	}
 
 	// Buffer should have the new messages
-	ddh.bufferMu.Lock()
-	bufferLen = len(ddh.buffer)
-	ddh.bufferMu.Unlock()
+	ddh.batch.bufferMu.Lock()
+	bufferLen = len(ddh.batch.buffer)
+	ddh.batch.bufferMu.Unlock()
 
 	if bufferLen != 3 {
 		t.Errorf("Expected 3 messages in buffer after MaxBatchSize flush, got %d", bufferLen)
@@ -232,9 +258,9 @@ func TestBatchingContextCancellation(t *testing.T) {
 	logger.Info("message 3")
 
 	// Verify messages are buffered
-	ddh.bufferMu.Lock()
-	bufferLen := len(ddh.buffer)
-	ddh.bufferMu.Unlock()
+	ddh.batch.bufferMu.Lock()
+	bufferLen := len(ddh.batch.buffer)
+	ddh.batch.bufferMu.Unlock()
 
 	if bufferLen != 3 {
 		t.Errorf("Expected 3 messages in buffer, got %d", bufferLen)
@@ -247,9 +273,9 @@ func TestBatchingContextCancellation(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Buffer should be empty after flush
-	ddh.bufferMu.Lock()
-	bufferLen = len(ddh.buffer)
-	ddh.bufferMu.Unlock()
+	ddh.batch.bufferMu.Lock()
+	bufferLen = len(ddh.batch.buffer)
+	ddh.batch.bufferMu.Unlock()
 
 	if bufferLen != 0 {
 		t.Errorf("Expected buffer to be empty after context cancellation, got %d items", bufferLen)
@@ -279,9 +305,9 @@ func TestBatchingManualFlush(t *testing.T) {
 	logger.Info("message 3")
 
 	// Verify messages are buffered
-	ddh.bufferMu.Lock()
-	bufferLen := len(ddh.buffer)
-	ddh.bufferMu.Unlock()
+	ddh.batch.bufferMu.Lock()
+	bufferLen := len(ddh.batch.buffer)
+	ddh.batch.bufferMu.Unlock()
 
 	if bufferLen != 3 {
 		t.Errorf("Expected 3 messages in buffer, got %d", bufferLen)
@@ -295,9 +321,9 @@ func TestBatchingManualFlush(t *testing.T) {
 	// but we're only testing the batching behavior, not the actual send to Datadog
 
 	// Buffer should be empty after flush (regardless of send error)
-	ddh.bufferMu.Lock()
-	bufferLen = len(ddh.buffer)
-	ddh.bufferMu.Unlock()
+	ddh.batch.bufferMu.Lock()
+	bufferLen = len(ddh.batch.buffer)
+	ddh.batch.bufferMu.Unlock()
 
 	if bufferLen != 0 {
 		t.Errorf("Expected buffer to be empty after manual flush, got %d items", bufferLen)
@@ -326,9 +352,9 @@ func TestBatchingMultipleBatches(t *testing.T) {
 	logger.Info("batch 1 message 2")
 
 	// Verify first batch is buffered
-	ddh.bufferMu.Lock()
-	bufferLen := len(ddh.buffer)
-	ddh.bufferMu.Unlock()
+	ddh.batch.bufferMu.Lock()
+	bufferLen := len(ddh.batch.buffer)
+	ddh.batch.bufferMu.Unlock()
 
 	if bufferLen != 2 {
 		t.Errorf("Expected 2 messages in first batch, got %d", bufferLen)
@@ -340,9 +366,9 @@ func TestBatchingMultipleBatches(t *testing.T) {
 	cancel1()
 
 	// Buffer should be empty
-	ddh.bufferMu.Lock()
-	bufferLen = len(ddh.buffer)
-	ddh.bufferMu.Unlock()
+	ddh.batch.bufferMu.Lock()
+	bufferLen = len(ddh.batch.buffer)
+	ddh.batch.bufferMu.Unlock()
 
 	if bufferLen != 0 {
 		t.Errorf("Expected buffer to be empty after first flush, got %d items", bufferLen)
@@ -354,9 +380,9 @@ func TestBatchingMultipleBatches(t *testing.T) {
 	logger.Info("batch 2 message 3")
 
 	// Verify second batch is buffered
-	ddh.bufferMu.Lock()
-	bufferLen = len(ddh.buffer)
-	ddh.bufferMu.Unlock()
+	ddh.batch.bufferMu.Lock()
+	bufferLen = len(ddh.batch.buffer)
+	ddh.batch.bufferMu.Unlock()
 
 	if bufferLen != 3 {
 		t.Errorf("Expected 3 messages in buffer for second batch, got %d", bufferLen)
@@ -368,9 +394,9 @@ func TestBatchingMultipleBatches(t *testing.T) {
 	cancel2()
 
 	// Buffer should be empty again
-	ddh.bufferMu.Lock()
-	bufferLen = len(ddh.buffer)
-	ddh.bufferMu.Unlock()
+	ddh.batch.bufferMu.Lock()
+	bufferLen = len(ddh.batch.buffer)
+	ddh.batch.bufferMu.Unlock()
 
 	if bufferLen != 0 {
 		t.Errorf("Expected buffer to be empty after second flush, got %d items", bufferLen)
@@ -422,9 +448,9 @@ func TestBatchingConcurrentWrites(t *testing.T) {
 	const messagesPerGoroutine = 100
 	done := make(chan bool, numGoroutines)
 
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		go func(id int) {
-			for j := 0; j < messagesPerGoroutine; j++ {
+			for j := range messagesPerGoroutine {
 				logger.Info("concurrent message", "goroutine", id, "msg", j)
 			}
 			done <- true
@@ -432,7 +458,7 @@ func TestBatchingConcurrentWrites(t *testing.T) {
 	}
 
 	// Wait for all goroutines to complete
-	for i := 0; i < numGoroutines; i++ {
+	for range numGoroutines {
 		<-done
 	}
 
@@ -445,9 +471,9 @@ func TestBatchingConcurrentWrites(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Verify no panic occurred and buffer is empty after final flush
-	ddh.bufferMu.Lock()
-	bufferLen := len(ddh.buffer)
-	ddh.bufferMu.Unlock()
+	ddh.batch.bufferMu.Lock()
+	bufferLen := len(ddh.batch.buffer)
+	ddh.batch.bufferMu.Unlock()
 
 	// Buffer should be empty after manual flush
 	if bufferLen != 0 {
@@ -473,7 +499,7 @@ func TestBatchingConcurrentFlushes(t *testing.T) {
 	logger := slog.New(handler)
 
 	// Add some messages
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		logger.Info("message", "index", i)
 	}
 
@@ -481,7 +507,7 @@ func TestBatchingConcurrentFlushes(t *testing.T) {
 	const numFlushes = 5
 	done := make(chan error, numFlushes)
 
-	for i := 0; i < numFlushes; i++ {
+	for range numFlushes {
 		go func() {
 			flushCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
 			defer cancel()
@@ -490,15 +516,15 @@ func TestBatchingConcurrentFlushes(t *testing.T) {
 	}
 
 	// Wait for all flushes to complete
-	for i := 0; i < numFlushes; i++ {
+	for range numFlushes {
 		<-done
 		// We ignore errors since we don't have valid credentials
 	}
 
 	// Verify no panic occurred and buffer is empty
-	ddh.bufferMu.Lock()
-	bufferLen := len(ddh.buffer)
-	ddh.bufferMu.Unlock()
+	ddh.batch.bufferMu.Lock()
+	bufferLen := len(ddh.batch.buffer)
+	ddh.batch.bufferMu.Unlock()
 
 	if bufferLen != 0 {
 		t.Errorf("Expected buffer to be empty after concurrent flushes, got %d items", bufferLen)
@@ -530,8 +556,8 @@ func TestBatchingRaceCondition(t *testing.T) {
 	// might also be reading from the timer channel
 	done := make(chan bool)
 	go func() {
-		for i := 0; i < 100; i++ {
-			for j := 0; j < 5; j++ {
+		for i := range 100 {
+			for j := range 5 {
 				logger.Info("message", "batch", i, "msg", j)
 			}
 			// Small delay to let timer fire
@@ -588,7 +614,7 @@ func TestBatchingOverflowAfterScheduledFlush(t *testing.T) {
 	// flushes continue to trigger as buffer refills after each flush.
 	const totalMessages = 50
 
-	for i := 0; i < totalMessages; i++ {
+	for i := range totalMessages {
 		logger.Info("message", "index", i)
 
 		// Small delay every 10 messages to allow some flushes to complete
@@ -603,9 +629,9 @@ func TestBatchingOverflowAfterScheduledFlush(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Check buffer - should be empty or very small after all flushes complete
-	ddh.bufferMu.Lock()
-	bufferLen := len(ddh.buffer)
-	ddh.bufferMu.Unlock()
+	ddh.batch.bufferMu.Lock()
+	bufferLen := len(ddh.batch.buffer)
+	ddh.batch.bufferMu.Unlock()
 
 	// With >= comparison and proper flag handling, buffer should stay small
 	// as flushes trigger regularly. Without it, buffer would accumulate.

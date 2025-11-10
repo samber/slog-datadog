@@ -644,3 +644,75 @@ func TestBatchingOverflowAfterScheduledFlush(t *testing.T) {
 	t.Logf("Final buffer size: %d messages (sent %d messages total with MaxBatchSize=%d)",
 		bufferLen, totalMessages, maxBatchSize)
 }
+func TestStop(t *testing.T) {
+	ctx := context.Background()
+	client, cleanup := createTestClient()
+	defer cleanup()
+
+	handler := Option{
+		Client:        client,
+		Context:       ctx,
+		Batching:      true,
+		BatchDuration: 10 * time.Second, // Long duration so Stop() handles the flush
+	}.NewDatadogHandler()
+
+	ddh := handler.(*DatadogHandler)
+	logger := slog.New(handler)
+
+	// Log some messages
+	logger.Info("message 1")
+	logger.Info("message 2")
+	logger.Info("message 3")
+
+	// Verify messages are buffered
+	ddh.batch.bufferMu.Lock()
+	bufferLen := len(ddh.batch.buffer)
+	ddh.batch.bufferMu.Unlock()
+
+	if bufferLen != 3 {
+		t.Errorf("Expected 3 messages in buffer before Stop(), got %d", bufferLen)
+	}
+
+	// Call Stop with timeout
+	stopCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	_ = ddh.Stop(stopCtx)
+
+	// Buffer should be empty after Stop()
+	ddh.batch.bufferMu.Lock()
+	bufferLen = len(ddh.batch.buffer)
+	ddh.batch.bufferMu.Unlock()
+
+	if bufferLen != 0 {
+		t.Errorf("Expected buffer to be empty after Stop(), got %d items", bufferLen)
+	}
+}
+
+func TestStopWithoutBatching(t *testing.T) {
+	ctx := context.Background()
+	client, cleanup := createTestClient()
+	defer cleanup()
+
+	handler := Option{
+		Client:   client,
+		Context:  ctx,
+		Batching: false,
+	}.NewDatadogHandler()
+
+	ddh := handler.(*DatadogHandler)
+	logger := slog.New(handler)
+
+	// Log some messages
+	logger.Info("message 1")
+	logger.Info("message 2")
+
+	// Call Stop - should complete without error even though batching is disabled
+	stopCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	err := ddh.Stop(stopCtx)
+
+	if err != nil {
+		t.Errorf("Expected no error from Stop() when batching is disabled, got %v", err)
+	}
+}
+

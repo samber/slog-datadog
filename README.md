@@ -189,7 +189,14 @@ func main() {
 
 ### Batching
 
-To improve performance and reduce network overhead, you can enable batching to send multiple log entries in a single request:
+To improve performance and reduce network overhead, you can enable batching to send multiple log entries in a single request.
+
+When batching is enabled, logs are buffered and sent either:
+- When the batch duration elapses (configurable via `BatchDuration`, default: 5 seconds)
+- When the buffer reaches `MaxBatchSize` (if configured)
+- When `Stop()` is called to gracefully shut down
+
+**Important:** Always call `Stop()` before your application exits to ensure all buffered logs are flushed and goroutines are properly cleaned up.
 
 ```go
 import (
@@ -207,10 +214,6 @@ func main() {
 	apiKey := "xxx"
 	apiClient, ctx := newDatadogClient(endpoint, apiKey)
 
-	// Logs are flushed when the provided context is cancelled. This is
-	// needed to prevent goroutine leaks when using the batching feature.
-	ctx, cancel := context.WithCancel(ctx)
-
 	handler := slogdatadog.Option{
 		Level:         slog.LevelDebug,
 		Client:        apiClient,
@@ -224,8 +227,7 @@ func main() {
 
 	// Stop the batching goroutine and flush any remaining logs w/ a 5s timeout
 	defer func() {
-		cancel()
-		handler.Flush(context.WithTimeout(context.Background(), 5*time.Second))
+		handler.Stop(context.WithTimeout(context.Background(), 5*time.Second))
 	}()
 
 	logger := slog.New(handler)

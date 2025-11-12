@@ -86,13 +86,18 @@ func (o Option) NewDatadogHandler() slog.Handler {
 		option: o,
 		attrs:  []slog.Attr{},
 		groups: []string{},
+		wg:     &sync.WaitGroup{},
 	}
+
+	// Wrap the provided context with a cancelable context
+	handler.option.Context, handler.cancel = context.WithCancel(o.Context)
 
 	// Start the buffer processing goroutine if batching is enabled
 	if o.Batching {
 		handler.batch = &batchState{
 			bufferTimer: time.NewTimer(o.BatchDuration),
 		}
+		handler.wg.Add(1)
 		go handler.processBuffer()
 	}
 
@@ -113,6 +118,8 @@ type DatadogHandler struct {
 	option Option
 	attrs  []slog.Attr
 	groups []string
+	wg     *sync.WaitGroup
+	cancel context.CancelFunc
 	batch  *batchState // nil when batching is disabled
 }
 
@@ -142,7 +149,9 @@ func (h *DatadogHandler) Handle(ctx context.Context, record slog.Record) error {
 	}
 
 	// non-blocking
+	h.wg.Add(1)
 	go func() {
+		defer h.wg.Done()
 		_ = h.send([]string{string(bytes)})
 	}()
 
@@ -161,6 +170,8 @@ func (h *DatadogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 		option: h.option,
 		attrs:  slogcommon.AppendAttrsToGroup(h.groups, h.attrs, attrs...),
 		groups: h.groups,
+		wg:     h.wg,
+		cancel: h.cancel,
 		batch:  h.batch, // Share batching state with parent handler
 	}
 }
@@ -175,11 +186,16 @@ func (h *DatadogHandler) WithGroup(name string) slog.Handler {
 		option: h.option,
 		attrs:  h.attrs,
 		groups: append(h.groups, name),
+		wg:     h.wg,
+		cancel: h.cancel,
 		batch:  h.batch, // Share batching state with parent handler
 	}
 }
 
 func (h *DatadogHandler) Flush(ctx context.Context) error {
+	if !h.option.Batching {
+		return nil
+	}
 	errChan := make(chan error)
 	go func() {
 		errChan <- h.flushBuffer()
@@ -191,6 +207,15 @@ func (h *DatadogHandler) Flush(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (h *DatadogHandler) Stop(ctx context.Context) error {
+	// Cancel the context to stop the buffer processing goroutine
+	h.cancel()
+	// Wait for all outstanding goroutines to finish
+	h.wg.Wait()
+	// Flush any remaining logs
+	return h.Flush(ctx)
 }
 
 func (h *DatadogHandler) flushBuffer() error {
@@ -237,6 +262,7 @@ func (h *DatadogHandler) scheduleFlush(duration time.Duration) {
 }
 
 func (h *DatadogHandler) processBuffer() {
+	defer h.wg.Done()
 	for {
 		select {
 		case <-h.option.Context.Done():

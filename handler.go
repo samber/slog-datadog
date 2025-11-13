@@ -90,7 +90,7 @@ func (o Option) NewDatadogHandler() slog.Handler {
 	}
 
 	// Wrap the provided context with a cancelable context
-	handler.option.Context, handler.cancel = context.WithCancel(o.Context)
+	handler.ctx, handler.cancel = context.WithCancel(o.Context)
 
 	// Start the buffer processing goroutine if batching is enabled
 	if o.Batching {
@@ -119,6 +119,7 @@ type DatadogHandler struct {
 	attrs  []slog.Attr
 	groups []string
 	wg     *sync.WaitGroup
+	ctx    context.Context
 	cancel context.CancelFunc
 	batch  *batchState // nil when batching is disabled
 }
@@ -171,6 +172,7 @@ func (h *DatadogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 		attrs:  slogcommon.AppendAttrsToGroup(h.groups, h.attrs, attrs...),
 		groups: h.groups,
 		wg:     h.wg,
+		ctx:    h.ctx,
 		cancel: h.cancel,
 		batch:  h.batch, // Share batching state with parent handler
 	}
@@ -187,6 +189,7 @@ func (h *DatadogHandler) WithGroup(name string) slog.Handler {
 		attrs:  h.attrs,
 		groups: append(h.groups, name),
 		wg:     h.wg,
+		ctx:    h.ctx,
 		cancel: h.cancel,
 		batch:  h.batch, // Share batching state with parent handler
 	}
@@ -265,7 +268,7 @@ func (h *DatadogHandler) processBuffer() {
 	defer h.wg.Done()
 	for {
 		select {
-		case <-h.option.Context.Done():
+		case <-h.ctx.Done():
 			_ = h.flushBuffer()
 			h.stopBufferTimer()
 			return
@@ -316,6 +319,8 @@ func (h *DatadogHandler) send(messages []string) error {
 		}
 	}
 
+	// Do not use h.ctx here because it is cancelled when the handler is stopped.
+	// Use h.option.Context instead, which is the original context passed to the handler.
 	ctx, cancel := context.WithTimeout(h.option.Context, h.option.Timeout)
 	defer cancel()
 

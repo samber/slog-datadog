@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"log/slog"
@@ -23,11 +24,16 @@ type Option struct {
 	Client  *datadog.APIClient
 	Context context.Context
 	Timeout time.Duration // default: 10s
+
 	// batching (default: disabled)
-	// Batching bool	// @TODO
+	Batching      bool
+	BatchDuration time.Duration // default: 5s
+	MaxBatchSize  int           // default: 0 (no limit)
 
 	// source parameters
-	Service    string
+	Service string
+	// source (optional): Allows overriding the `source` field sent to DD. defaulted to version.name
+	Source     string
 	Hostname   string
 	GlobalTags map[string]string
 
@@ -72,19 +78,50 @@ func (o Option) NewDatadogHandler() slog.Handler {
 		o.AttrFromContext = []func(ctx context.Context) []slog.Attr{}
 	}
 
-	return &DatadogHandler{
+	if o.BatchDuration == 0 {
+		o.BatchDuration = 5 * time.Second
+	}
+
+	handler := &DatadogHandler{
 		option: o,
 		attrs:  []slog.Attr{},
 		groups: []string{},
+		wg:     &sync.WaitGroup{},
 	}
+
+	// Wrap the provided context with a cancelable context
+	handler.ctx, handler.cancel = context.WithCancel(o.Context)
+
+	// Start the buffer processing goroutine if batching is enabled
+	if o.Batching {
+		handler.batch = &batchState{
+			bufferTimer: time.NewTimer(o.BatchDuration),
+		}
+		handler.wg.Add(1)
+		go handler.processBuffer()
+	}
+
+	return handler
 }
 
 var _ slog.Handler = (*DatadogHandler)(nil)
+
+type batchState struct {
+	buffer                  []string
+	immediateFlushScheduled bool
+	bufferMu                sync.Mutex
+	bufferTimer             *time.Timer
+	bufferTimerMu           sync.Mutex
+}
 
 type DatadogHandler struct {
 	option Option
 	attrs  []slog.Attr
 	groups []string
+	wg     *sync.WaitGroup
+	ctx    context.Context
+	cancel context.CancelFunc
+	batch  *batchState // nil when batching is disabled
 }
 
 func (h *DatadogHandler) Enabled(_ context.Context, level slog.Level) bool {
@@ -97,10 +134,26 @@ func (h *DatadogHandler) Handle(ctx context.Context, record slog.Record) error {
 		return err
 	}
 
+	if h.option.Batching {
+		h.batch.bufferMu.Lock()
+		defer h.batch.bufferMu.Unlock()
+
+		h.batch.buffer = append(h.batch.buffer, string(bytes))
+		if h.option.MaxBatchSize > 0 &&
+			len(h.batch.buffer) >= h.option.MaxBatchSize &&
+			!h.batch.immediateFlushScheduled {
+			// if the buffer is full, schedule a flush immediately
+			h.batch.immediateFlushScheduled = true
+			h.scheduleFlush(0)
+		}
+		return nil
+	}
+
 	// non-blocking
+	h.wg.Add(1)
 	go func() {
-		// @TODO: batching
-		_ = h.send(string(bytes))
+		defer h.wg.Done()
+		_ = h.send([]string{string(bytes)})
 	}()
 
 	return nil
@@ -118,6 +171,10 @@ func (h *DatadogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 		option: h.option,
 		attrs:  slogcommon.AppendAttrsToGroup(h.groups, h.attrs, attrs...),
 		groups: h.groups,
+		wg:     h.wg,
+		ctx:    h.ctx,
+		cancel: h.cancel,
+		batch:  h.batch, // Share batching state with parent handler
 	}
 }
 
@@ -131,10 +188,114 @@ func (h *DatadogHandler) WithGroup(name string) slog.Handler {
 		option: h.option,
 		attrs:  h.attrs,
 		groups: append(h.groups, name),
+		wg:     h.wg,
+		ctx:    h.ctx,
+		cancel: h.cancel,
+		batch:  h.batch, // Share batching state with parent handler
 	}
 }
 
-func (h *DatadogHandler) send(message string) error {
+func (h *DatadogHandler) Flush(ctx context.Context) error {
+	if !h.option.Batching {
+		return nil
+	}
+	errChan := make(chan error)
+	go func() {
+		errChan <- h.flushBuffer()
+	}()
+
+	select {
+	case err := <-errChan:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (h *DatadogHandler) Stop(ctx context.Context) error {
+	// Cancel the context to stop the buffer processing goroutine
+	h.cancel()
+	// Wait for all outstanding goroutines to finish
+	h.wg.Wait()
+	// Flush any remaining logs
+	return h.Flush(ctx)
+}
+
+func (h *DatadogHandler) flushBuffer() error {
+	h.batch.bufferMu.Lock()
+	messages := h.batch.buffer
+	h.batch.buffer = nil
+	h.batch.immediateFlushScheduled = false
+	h.batch.bufferMu.Unlock()
+
+	if len(messages) == 0 {
+		return nil
+	}
+
+	return h.send(messages)
+}
+
+func (h *DatadogHandler) stopBufferTimer() {
+	h.batch.bufferTimerMu.Lock()
+	defer h.batch.bufferTimerMu.Unlock()
+
+	// Stop the timer if it's running
+	if !h.batch.bufferTimer.Stop() {
+		// Drain stale value if timer fired before stopped
+		<-h.batch.bufferTimer.C
+	}
+}
+
+func (h *DatadogHandler) scheduleFlush(duration time.Duration) {
+	h.batch.bufferTimerMu.Lock()
+	defer h.batch.bufferTimerMu.Unlock()
+
+	// Stop the timer if it's running
+	if !h.batch.bufferTimer.Stop() {
+		// Drain stale value if timer fired before stopped
+		// This is a non-blocking read in case processBuffer reads the channel here.
+		select {
+		case <-h.batch.bufferTimer.C:
+		default:
+		}
+	}
+
+	// Reset the timer to the new duration
+	h.batch.bufferTimer.Reset(duration)
+}
+
+func (h *DatadogHandler) processBuffer() {
+	defer h.wg.Done()
+	for {
+		select {
+		case <-h.ctx.Done():
+			_ = h.flushBuffer()
+			h.stopBufferTimer()
+			return
+		case <-h.batch.bufferTimer.C:
+			_ = h.flushBuffer()
+
+			// Check if buffer filled up again during the flush
+			// If immediateFlushScheduled is true, Handle() already scheduled a flush, so don't schedule again
+			// Otherwise, schedule based on buffer size
+			h.batch.bufferMu.Lock()
+			if !h.batch.immediateFlushScheduled {
+				if h.option.MaxBatchSize > 0 && len(h.batch.buffer) >= h.option.MaxBatchSize {
+					// Buffer is still full, flush immediately
+					h.scheduleFlush(0)
+					h.batch.immediateFlushScheduled = true
+				} else {
+					// Buffer is below threshold, use normal periodic duration
+					h.scheduleFlush(h.option.BatchDuration)
+				}
+			}
+			h.batch.bufferMu.Unlock()
+
+		}
+	}
+}
+
+func (h *DatadogHandler) send(messages []string) error {
 	var tags []string
 	if h.option.GlobalTags != nil {
 		for key, value := range h.option.GlobalTags {
@@ -142,16 +303,24 @@ func (h *DatadogHandler) send(message string) error {
 		}
 	}
 
-	body := []datadogV2.HTTPLogItem{
-		{
-			Ddsource: datadog.PtrString(name),
+	source := h.option.Source
+	if source == "" {
+		source = name
+	}
+
+	body := make([]datadogV2.HTTPLogItem, len(messages))
+	for i, message := range messages {
+		body[i] = datadogV2.HTTPLogItem{
+			Ddsource: datadog.PtrString(source),
 			Hostname: datadog.PtrString(h.option.Hostname),
 			Service:  datadog.PtrString(h.option.Service),
 			Ddtags:   datadog.PtrString(strings.Join(tags, ",")),
 			Message:  message,
-		},
+		}
 	}
 
+	// Do not use h.ctx here because it is cancelled when the handler is stopped.
+	// Use h.option.Context instead, which is the original context passed to the handler.
 	ctx, cancel := context.WithTimeout(h.option.Context, h.option.Timeout)
 	defer cancel()
 

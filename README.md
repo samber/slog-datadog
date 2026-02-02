@@ -2,7 +2,7 @@
 # slog: Datadog handler
 
 [![tag](https://img.shields.io/github/tag/samber/slog-datadog.svg)](https://github.com/samber/slog-datadog/releases)
-![Go Version](https://img.shields.io/badge/Go-%3E%3D%201.21-%23007d9c)
+![Go Version](https://img.shields.io/badge/Go-%3E%3D%201.22-%23007d9c)
 [![GoDoc](https://godoc.org/github.com/samber/slog-datadog?status.svg)](https://pkg.go.dev/github.com/samber/slog-datadog)
 ![Build Status](https://github.com/samber/slog-datadog/actions/workflows/test.yml/badge.svg)
 [![Go report](https://goreportcard.com/badge/github.com/samber/slog-datadog)](https://goreportcard.com/report/github.com/samber/slog-datadog)
@@ -16,12 +16,21 @@ A [Datadog](https://datadoghq.com) Handler for [slog](https://pkg.go.dev/log/slo
   <hr>
   <sup><b>Sponsored by:</b></sup>
   <br>
-  <a href="https://quickwit.io?utm_campaign=github_sponsorship&utm_medium=referral&utm_content=samber-slog-datadog&utm_source=github">
+  <a href="https://cast.ai/samuel">
     <div>
-      <img src="https://github.com/samber/oops/assets/2951285/49aaaa2b-b8c6-4f21-909f-c12577bb6a2e" width="240" alt="Quickwit">
+      <img src="https://github.com/user-attachments/assets/502f8fa8-e7e8-4754-a51f-036d0443e694" width="200" alt="Cast AI">
     </div>
     <div>
-      Cloud-native search engine for observability - An OSS alternative to Splunk, Elasticsearch, Loki, and Tempo.
+      Cut Kubernetes & AI costs, boost application stability
+    </div>
+  </a>
+  <br>
+  <a href="https://www.dash0.com?utm_campaign=148395251-samber%20github%20sponsorship&utm_source=github&utm_medium=sponsorship&utm_content=samber">
+    <div>
+      <img src="https://github.com/user-attachments/assets/b1f2e876-0954-4dc3-824d-935d29ba8f3f" width="200" alt="Dash0">
+    </div>
+    <div>
+      100% OpenTelemetry-native observability platform<br>Simple to use, built on open standards, and designed for full cost control
     </div>
   </a>
   <hr>
@@ -96,8 +105,13 @@ type Option struct {
 	Context context.Context
 	Timeout time.Duration	// default: 10s
 
+	// batching (default: disabled)
+	Batching      bool
+	BatchDuration time.Duration // default: 5s
+
 	// source parameters
 	Service    string
+	Source     string
 	Hostname   string
 	GlobalTags map[string]string
 
@@ -181,6 +195,77 @@ func main() {
 		Info("user registration")
 }
 ```
+
+### Batching
+
+To improve performance and reduce network overhead, you can enable batching to send multiple log entries in a single request.
+
+When batching is enabled, logs are buffered and sent either:
+- When the batch duration elapses (configurable via `BatchDuration`, default: 5 seconds)
+- When the buffer reaches `MaxBatchSize` (if configured)
+- When `Stop()` is called to gracefully shut down
+
+**Important:** Always call `Stop()` before your application exits to ensure all buffered logs are flushed and goroutines are properly cleaned up.
+
+```go
+import (
+	"context"
+	"github.com/DataDog/datadog-api-client-go/v2/api/datadog"
+	slogdatadog "github.com/samber/slog-datadog/v2"
+	"log/slog"
+	"time"
+)
+
+func main() {
+	host := "1.2.3.4"
+	service := "api"
+	endpoint := slogdatadog.DatadogHostEU
+	apiKey := "xxx"
+	apiClient, ctx := newDatadogClient(endpoint, apiKey)
+
+	handler := slogdatadog.Option{
+		Level:         slog.LevelDebug,
+		Client:        apiClient,
+		Context:       ctx,
+		Timeout:       5 * time.Second,
+		Hostname:      host,
+		Service:       service,
+		Batching:      true,             // Enable batching
+		BatchDuration: 10 * time.Second, // Send logs every 10 seconds (default: 5s)
+	}.NewDatadogHandler()
+
+	// Stop the batching goroutine and flush any remaining logs w/ a 5s timeout
+	defer func() {
+		handler.Stop(context.WithTimeout(context.Background(), 5*time.Second))
+	}()
+
+	logger := slog.New(handler)
+
+	logger = logger.
+		With("environment", "dev").
+		With("release", "v1.0.0")
+
+	// log error
+	logger.
+		With("category", "sql").
+		With("query.statement", "SELECT COUNT(*) FROM users;").
+		With("query.duration", 1*time.Second).
+		With("error", fmt.Errorf("could not count users")).
+		Error("caramba!")
+
+	// log user signup
+	logger.
+		With(
+			slog.Group("user",
+				slog.String("id", "user-123"),
+				slog.Time("created_at", time.Now()),
+			),
+		).
+		Info("user registration")
+}
+```
+
+When batching is enabled, logs are buffered in memory and sent to Datadog periodically based on `BatchDuration`. This significantly reduces the number of API calls and improves throughput for high-volume logging scenarios.
 
 ### Tracing
 

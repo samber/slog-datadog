@@ -6,7 +6,7 @@ toolchain go1.23.4
 
 require (
 	github.com/DataDog/datadog-api-client-go/v2 v2.54.0
-	github.com/samber/slog-common v0.19.0
+	github.com/samber/slog-common v0.20.0
 	go.uber.org/goleak v1.3.0
 )
 
@@ -15,7 +15,7 @@ require (
 	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/google/uuid v1.5.0 // indirect
-	github.com/samber/lo v1.51.0 // indirect
+	github.com/samber/lo v1.52.0 // indirect
 	github.com/stretchr/testify v1.10.0 // indirect
 	golang.org/x/net v0.33.0 // indirect
 	golang.org/x/oauth2 v0.10.0 // indirect

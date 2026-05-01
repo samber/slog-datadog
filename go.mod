@@ -6,7 +6,7 @@ toolchain go1.23.4
 
 require (
 	github.com/DataDog/datadog-api-client-go/v2 v2.59.0
-	github.com/samber/slog-common v0.21.0
+	github.com/samber/slog-common v0.22.0
 	go.uber.org/goleak v1.3.0
 )
 
